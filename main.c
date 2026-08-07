@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 The ICON EBFM ComIn Plugin Authors
+//
+// SPDX-License-Identifier: BSD-3-Clause
+
 #include "comin.h"
 
 void init(void);

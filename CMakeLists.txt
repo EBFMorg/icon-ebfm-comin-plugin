@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 The ICON EBFM ComIn Plugin Authors
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 cmake_minimum_required(VERSION 3.18)
 project(ebfm_comin
   VERSION 0.0.1
