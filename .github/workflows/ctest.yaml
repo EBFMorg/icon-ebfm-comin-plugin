@@ -1,0 +1,135 @@
+# SPDX-FileCopyrightText: 2026 The ICON EBFM ComIn Plugin Authors
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+name: ctest
+
+on: [push, pull_request]
+
+concurrency:
+  group: ctest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ctest:
+    # Ubuntu 24.04 is one of the reference platforms of YAC's install
+    # instructions (https://dkrz-sw.gitlab-pages.dkrz.de/yac/d1/d9f/installing_yac.html),
+    # so its libfyaml/NetCDF/OpenMPI packages are known to work.
+    runs-on: ubuntu-24.04
+    env:
+      # Versions of the dependencies we build from source. README.md
+      # "Preparations" points here as the reference for what works.
+      YAXT_TAG: v0.10.0
+      YAC_TAG: v3.20.0
+      # main.c needs the named-YAC-points API, see README.md "Preparations"
+      COMIN_BRANCH: 166-yac-named-points
+      # Same variable names the README uses, so the steps below are the
+      # documented commands verbatim.
+      YAC_INSTALL_DIR: ${{ github.workspace }}/deps/install
+      COMIN_REPO_DIR: ${{ github.workspace }}/deps/comin
+      # yaxt and YAC are built without a batch scheduler, so let OpenMPI
+      # place more ranks than the runner has cores if it wants to.
+      OMPI_MCA_rmaps_base_oversubscribe: 1
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install --no-install-recommends \
+            autoconf \
+            automake \
+            gfortran \
+            libfyaml-dev \
+            liblapack-dev \
+            libnetcdf-dev \
+            libnetcdff-dev \
+            libopenmpi-dev \
+            libtool \
+            openmpi-bin
+
+      # yaxt and YAC are pinned to release tags, so their install tree only
+      # has to be rebuilt when the tags (or the runner image) change.
+      - name: Cache yaxt and YAC installation
+        id: cache-yac
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.YAC_INSTALL_DIR }}
+          key: yac-${{ runner.os }}-${{ runner.arch }}-yaxt-${{ env.YAXT_TAG }}-yac-${{ env.YAC_TAG }}
+
+      # https://dkrz-sw.gitlab-pages.dkrz.de/yac/d1/d8b/installing_yaxt.html
+      - name: Build and install yaxt
+        if: steps.cache-yac.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$YAXT_TAG" \
+            https://gitlab.dkrz.de/dkrz-sw/yaxt.git "$RUNNER_TEMP/yaxt"
+          cd "$RUNNER_TEMP/yaxt"
+          ./scripts/reconfigure
+          mkdir build && cd build
+          ../configure \
+            CC=mpicc \
+            FC=mpif90 \
+            MPI_LAUNCH="mpirun --oversubscribe" \
+            --prefix="$YAC_INSTALL_DIR" \
+            --disable-static \
+            --without-example-programs \
+            --without-perf-programs \
+            --with-on-demand-check-programs
+          make -j4
+          make install
+
+      # https://dkrz-sw.gitlab-pages.dkrz.de/yac/d9/dcc/cmake.html
+      # YAC is built with CMake (not autotools) because this plugin resolves
+      # YAC via find_package(YAC) in config mode, and only the CMake build
+      # installs the yac-config.cmake package. See README.md "Preparations".
+      - name: Build and install YAC
+        if: steps.cache-yac.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$YAC_TAG" \
+            https://gitlab.dkrz.de/dkrz-sw/yac.git "$RUNNER_TEMP/yac"
+          cmake -S "$RUNNER_TEMP/yac" -B "$RUNNER_TEMP/yac/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$YAC_INSTALL_DIR" \
+            -DCMAKE_PREFIX_PATH="$YAC_INSTALL_DIR" \
+            -DCMAKE_C_COMPILER=mpicc \
+            -DCMAKE_Fortran_COMPILER=mpif90 \
+            -DYAC_ENABLE_MPI_CHECKS=OFF \
+            -DYAC_ENABLE_EXAMPLES=OFF \
+            -DYAC_ENABLE_TOOLS=OFF
+          cmake --build "$RUNNER_TEMP/yac/build" -j4
+          cmake --install "$RUNNER_TEMP/yac/build"
+
+      # ComIn is pinned to a branch rather than a tag, so key the cache on
+      # the commit that branch currently points at.
+      - name: Resolve ComIn revision
+        id: comin-rev
+        run: |
+          sha=$(git ls-remote https://gitlab.dkrz.de/icon-comin/comin.git \
+            "refs/heads/$COMIN_BRANCH" | cut -f1)
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ComIn build
+        id: cache-comin
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.COMIN_REPO_DIR }}
+          key: comin-${{ runner.os }}-${{ runner.arch }}-${{ steps.comin-rev.outputs.sha }}-yac-${{ env.YAC_TAG }}
+
+      - name: Build ComIn
+        if: steps.cache-comin.outputs.cache-hit != 'true'
+        run: |
+          git clone --branch "$COMIN_BRANCH" https://gitlab.dkrz.de/icon-comin/comin.git "$COMIN_REPO_DIR"
+          cd "$COMIN_REPO_DIR"
+          cmake -B build -DCOMIN_ENABLE_EXAMPLES=OFF -DBUILD_TESTING=ON -DCOMIN_ENABLE_REPLAY_TOOL=ON -DCOMIN_ENABLE_YAC=ON -DCMAKE_PREFIX_PATH=$YAC_INSTALL_DIR .
+          make -C build -j4
+
+      - name: Build plugin
+        run: |
+          export ComIn_DIR=$COMIN_REPO_DIR/build
+          cmake -B build -DCMAKE_PREFIX_PATH=$YAC_INSTALL_DIR .
+          make -C build
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
