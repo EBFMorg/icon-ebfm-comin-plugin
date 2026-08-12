@@ -10,6 +10,25 @@ ComIn Plugin to implement EBFM coupling ICON.
 
 ## Preparations
 
+Both dependencies below are built by [`.github/workflows/ctest.yaml`](.github/workflows/ctest.yaml)
+on every push, so that workflow is the executable version of this section — check there for the
+exact versions and flags currently known to work.
+
+### YAC
+
+This plugin uses YAC directly (`find_package(YAC)` in [`CMakeLists.txt`](CMakeLists.txt)), so it
+needs a YAC installation, and ComIn needs one too (see below). Install
+[yaxt](https://dkrz-sw.gitlab-pages.dkrz.de/yac/d1/d8b/installing_yaxt.html) and
+[YAC](https://dkrz-sw.gitlab-pages.dkrz.de/yac/d1/d9f/installing_yac.html) as described in the YAC
+documentation; installing both into the same `$YAC_INSTALL_DIR` keeps the steps below to a single
+`CMAKE_PREFIX_PATH`.
+
+`find_package(YAC)` resolves YAC in CMake config mode, so **YAC has to be built with its
+[CMake build system](https://dkrz-sw.gitlab-pages.dkrz.de/yac/d9/dcc/cmake.html)** — the autotools
+build installs no `yac-config.cmake` and will not be found.
+
+### ComIn
+
 Clone ComIn where you want it. This plugin needs the named-YAC-points API from branch
 [`166-yac-named-points`](https://gitlab.dkrz.de/icon-comin/comin/-/tree/166-yac-named-points) —
 `main.c` will not build against the default branch:
@@ -17,12 +36,11 @@ Clone ComIn where you want it. This plugin needs the named-YAC-points API from b
 ```sh
 git clone --branch 166-yac-named-points https://gitlab.dkrz.de/icon-comin/comin.git $COMIN_REPO_DIR
 cd $COMIN_REPO_DIR
-cmake -B build -DCOMIN_ENABLE_EXAMPLES=OFF -DBUILD_TESTING=ON -DCOMIN_ENABLE_REPLAY_TOOL=ON -DCOMIN_ENABLE_YAC=ON -DCMAKE_PREFIX_PATH=$YAC_INSTALL_DIR comin/
+cmake -B build -DCOMIN_ENABLE_EXAMPLES=OFF -DBUILD_TESTING=ON -DCOMIN_ENABLE_REPLAY_TOOL=ON -DCOMIN_ENABLE_YAC=ON -DCMAKE_PREFIX_PATH=$YAC_INSTALL_DIR .
 make -C build
 ```
 
-This plugin also needs YAC itself (`find_package(YAC)` in [`CMakeLists.txt`](CMakeLists.txt));
-point `CMAKE_PREFIX_PATH` at your YAC installation both here and in the [Build](#build) step below.
+ComIn is used from its build directory (see [Build](#build) below); no `cmake --install` needed.
 
 ## Build
 
@@ -35,6 +53,9 @@ make -C build
 ```
 
 ## Run Tests
+
+The first `ctest` run downloads ComIn's `test_nwp_R02B04` replay data from
+[gitlab.dkrz.de](https://gitlab.dkrz.de) (test `download_test_data`), so it needs network access.
 
 ```sh
 cd build
