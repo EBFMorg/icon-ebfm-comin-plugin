@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: 2026 The ICON EBFM ComIn Plugin Authors
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+## YAC coupling configuration to run the real EBFM (via its `ebfm` CLI) against
+## this plugin's ebfm_comin_cpl replay test, in place of test/receiver.c.
+## See README.md, section "Run Plugin with fake data and real EBFM".
+##
+## documentation on coupling configuration file can be found here:
+##  https://dkrz-sw.gitlab-pages.dkrz.de/yac/dd/dfa/yaml_file.html
+
+debug:
+  global_config:
+    enddef:
+      filename: out/coupling_config_after_enddef.yaml
+      include_definitions: true
+
+definitions:
+  # src_lag/tgt_lag of 1 are carried over from the working ICON<->EBFM config
+  # in the testcase repo (config/coupling_icon_ebfm.yaml). They shift which
+  # timestep a put/get is accounted to, which matters when the source writes
+  # its field before the target reads it within the same step.
+  time_config: &time_config
+    src_lag: 1
+    tgt_lag: 1
+  components:
+    # This plugin's own YAC component/grid (EBFM_COMIN_COMPONENT_NAME /
+    # ICON_ATMO_GRID_NAME in ebfm_fields.h). Note these are NOT "icon"/
+    # "icon_grid" as used by ebfm_dummy's coupling configs, since main.c
+    # never defines its own component under that name.
+    icon: &icon
+      component: "ebfm_comin"
+      grid: "icon_atmos_grid"
+    # EBFM's component/grid names are effectively fixed: "ebfm" is the
+    # `--component-name` default, and "ebfm_grid" is hardcoded in EBFM's
+    # YACCoupler._setup(). Only override the `ebfm` component line below if
+    # you also pass a matching `--component-name` to the `ebfm` CLI.
+    ebfm: &ebfm
+      component: "ebfm"
+      grid: "ebfm_grid"
+  component_pairs:
+    icon2ebfm: &icon2ebfm
+      source: *icon
+      target: *ebfm
+      <<: *time_config
+  interp_stacks:
+    # Nearest-neighbour with a single source point. Deliberately the cheapest
+    # stack that can produce a value everywhere: this setup only exists to
+    # prove the ICON<->EBFM plumbing works, and test/fake.c fills every ICON
+    # cell of a given field with the same constant (test/fake_values.h), so a
+    # more faithful interpolation would not change any received value. It
+    # also means the EBFM mesh's geographic location is irrelevant here.
+    # Use a proper stack (with a fallback) for anything but this smoke test.
+    interp_stack_nnn: &interp_stack_nnn
+      interpolation:
+        - nnn:
+            n: 1
+
+timestep_unit: ISO_format
+calendar: proleptic-gregorian
+coupling:
+  ## ICON -> EBFM. All 9 fields main.c defines (ebfm_fields.h) are listed
+  ## here, not just the 7 EBFM currently treats as "active". Reason: EBFM's
+  ## IconAtmo component (src/ebfm/coupling/components/icon_atmo.py) defines
+  ## YAC target fields for all 9 unconditionally, and any field it defines
+  ## that is not coupled here fails EBFM's post-enddef consistency check with
+  ##   AssertionError: Field '<name>' role mismatch:
+  ##     expected 'ExchangeType.TARGET', got 'ExchangeType.NONE'
+  ## (verified by removing `huss` from this list). main.c and test/fake.c
+  ## put/fill all 9 regardless.
+  ##
+  ## Why coupling_period: PT5M -- it has to divide evenly into both sides'
+  ## native field timestep, and PT5M is the only value that satisfies both
+  ## for the test_nwp_R02B04 replay data:
+  ##   * ICON side: main.c defines its fields with ICON's dynamics timestep
+  ##     (comin_descrdata_get_timesteplength()), which is PT05M in this
+  ##     replay data -- see the per-field `timestep:` entries under component
+  ##     `ebfm_comin` in the generated out/coupling_config_after_enddef.yaml.
+  ##   * EBFM side: whatever `--time-step` the `ebfm` CLI is given, so the
+  ##     README passes --time-step PT5M to match.
+  ## EBFM's own default is PT3H (and that is what production configs such as
+  ## ebfm_dummy/config/coupling_icon_atmo.yaml use), but PT3H is unusable
+  ## here: test_nwp_R02B04 only spans 25 minutes of model time
+  ## (2014-06-01T00:00:00 to 00:25:00), so a 3-hour coupling boundary would
+  ## never be reached. At PT5M the run performs 5 exchanges.
+  ##
+  ## If you point this at different replay data, re-derive the value the same
+  ## way: take the replay window from YAC's start/end_datetime mismatch error,
+  ## and the ICON timestep from the resolved config above.
+  - <<: [*icon2ebfm, *interp_stack_nnn]
+    coupling_period: PT5M
+    field:
+      - tas       # 2m temperature
+      - pr_snow   # snowfall flux
+      - pr        # liquid precipitation flux
+      - sfcwind   # 10m wind speed
+      - rsds      # surface downward shortwave radiation
+      - rlds      # surface downward longwave radiation
+      - clt       # total cloud cover fraction
+      - sfcpres   # surface pressure
+      - huss      # 2m specific humidity

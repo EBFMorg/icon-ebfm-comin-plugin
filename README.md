@@ -10,28 +10,17 @@ ComIn Plugin to implement EBFM coupling ICON.
 
 ## Preparations
 
-Both dependencies below are built by [`.github/workflows/ctest.yaml`](.github/workflows/ctest.yaml)
-on every push, so that workflow is the executable version of this section — check there for the
-exact versions and flags currently known to work.
+Both dependencies below are built by [`.github/workflows/ctest.yaml`](.github/workflows/ctest.yaml) on every push, so that workflow is the executable version of this section — check there for the exact versions and flags currently known to work.
 
 ### YAC
 
-This plugin uses YAC directly (`find_package(YAC)` in [`CMakeLists.txt`](CMakeLists.txt)), so it
-needs a YAC installation, and ComIn needs one too (see below). Install
-[yaxt](https://dkrz-sw.gitlab-pages.dkrz.de/yac/d1/d8b/installing_yaxt.html) and
-[YAC](https://dkrz-sw.gitlab-pages.dkrz.de/yac/d1/d9f/installing_yac.html) as described in the YAC
-documentation; installing both into the same `$YAC_INSTALL_DIR` keeps the steps below to a single
-`CMAKE_PREFIX_PATH`.
+This plugin uses YAC to connect ICON to EBFM. Install [yaxt](https://dkrz-sw.gitlab-pages.dkrz.de/yac/d1/d8b/installing_yaxt.html) and [YAC](https://dkrz-sw.gitlab-pages.dkrz.de/yac/d1/d9f/installing_yac.html) as described in the YAC documentation; installing both into the same `$YAC_INSTALL_DIR` keeps the steps below to a single `CMAKE_PREFIX_PATH`.
 
-`find_package(YAC)` resolves YAC in CMake config mode, so **YAC has to be built with its
-[CMake build system](https://dkrz-sw.gitlab-pages.dkrz.de/yac/d9/dcc/cmake.html)** — the autotools
-build installs no `yac-config.cmake` and will not be found.
+`find_package(YAC)` resolves YAC in CMake config mode, so it is recommended to build YAC with its [CMake build system](https://dkrz-sw.gitlab-pages.dkrz.de/yac/d9/dcc/cmake.html).
 
 ### ComIn
 
-Clone ComIn where you want it. This plugin needs the named-YAC-points API from branch
-[`166-yac-named-points`](https://gitlab.dkrz.de/icon-comin/comin/-/tree/166-yac-named-points) —
-`main.c` will not build against the default branch:
+Clone ComIn where you want it. This plugin needs experimental API from branch [`166-yac-named-points`](https://gitlab.dkrz.de/icon-comin/comin/-/tree/166-yac-named-points) `main.c` will not build against the default branch:
 
 ```sh
 git clone --branch 166-yac-named-points https://gitlab.dkrz.de/icon-comin/comin.git $COMIN_REPO_DIR
@@ -54,8 +43,7 @@ make -C build
 
 ## Run Tests
 
-The first `ctest` run downloads ComIn's `test_nwp_R02B04` replay data from
-[gitlab.dkrz.de](https://gitlab.dkrz.de) (test `download_test_data`), so it needs network access.
+The first `ctest` run downloads ComIn's `test_nwp_R02B04` replay data from [gitlab.dkrz.de](https://gitlab.dkrz.de) (test `download_test_data`), so it needs network access.
 
 ```sh
 cd build
@@ -69,7 +57,54 @@ ctest -R ebfm_comin_replay -V
 
 ```
 
+## Run Plugin with fake data and real EBFM
+
+Once the plugin passes its own replay tests above, you can go one step further and couple it to the real [EBFM model](https://github.com/EBFMorg/EBFM) instead of the `ebfm_receiver` from [`test/receiver.c`](test/receiver.c). This still runs against the fake ICON data from [`test/fake.c`](test/fake.c) (the `tas_fake` plugin).
+
+The invocation below has been run end to end against `test_nwp_R02B04` and completes with EBFM exchanging all 9 fields over 5 coupling steps.
+
+### Additional requirements
+
+- EBFM is installed with coupling support (`pip install 'EBFM[cpl]'`) into a venv. Follow [EBFM's own installation docs](https://github.com/EBFMorg/EBFM#installation-with-coupling-features).
+- Make sure to install YAC from source **with Python support**. You will need the C and Python interface of YAC, and ComIn has to be built against that same YAC. (The `yac` package from PyPI does ship a C interface, but it is unusable for a CMake build: `find_package(YAC)` fails on its own `find_dependency(yaxt)`, and its pkg-config files point at the manylinux build container's `/usr/local/lib`. See [`doc/ebfm_coupling_details.md`](doc/ebfm_coupling_details.md#on-the-pypi-yac-wheel).)
+- Activate the venv. You may also use `$VIRTUAL_ENV` as `-DCMAKE_PREFIX_PATH` and `-DCMAKE_INSTALL_PREFIX` during YAC installation to keep everything in one place.
+- You've already built this plugin as [described above in the build section](#build).
+
+Run it from this repo's `build/ebfm_comin_cpl` test directory:
+
+```sh
+export EBFM_COMIN_REPO_DIR=/path/to/this/repo
+export COMIN_REPLAY_BIN=/path/to/comin/build/replay_tool/comin_replay
+export EBFM_REPO_DIR=/path/to/your/EBFM/checkout   # for its bundled example mesh
+
+cd "$EBFM_COMIN_REPO_DIR/build/ebfm_comin_cpl"
+# clean up (if existing) & create some empty folders
+rm -r output
+mkdir output
+rm -r out
+mkdir out
+
+mpiexec -n 1 "$COMIN_REPLAY_BIN" ebfm_comin_cpl.nml \
+      : -n 1 ebfm \
+          --elmer-mesh "$EBFM_REPO_DIR/examples/elmer_wo_DEM/MESH" \
+          --elmer-mesh-crs-epsg 3413 \
+          --coupler-config "$EBFM_COMIN_REPO_DIR/examples/coupling.yaml" \
+          --couple-to-icon-atmo \
+          --no-shading \
+          --start-time "2014-06-01T00:00:00" \
+          --end-time "2014-06-01T00:25:00" \
+          --time-step PT5M
+```
+
+Notes about the parameters used in `ebfm`:
+
+* the `--start-time` and `--end-time` must match the replay data
+* `--time-step PT5M` must match both models' timesteps
+* the directories `output` and `out` must exist
+
 ## Use this plugin in ICON
+
+**untested!**
 
 After compilation you need to do the following steps.
 
