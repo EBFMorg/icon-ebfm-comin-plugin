@@ -64,12 +64,6 @@ void secondary_constructor(void) {
         snprintf(descr.name, sizeof(descr.name), "%s",
                  EBFM_FIELDS[i].icon_var_name);
         comin_var_handles[i] = comin_var_get(1, eps, &descr, COMIN_FLAG_READ);
-        if (comin_var_handles[i] == NULL) {
-            comin_plugin_finish_f(
-                EBFM_COMIN_COMPONENT_NAME,
-                "Failed to get variable %s",
-                descr.name);
-        }
     }
 }
 
